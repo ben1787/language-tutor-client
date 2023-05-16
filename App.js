@@ -161,7 +161,7 @@ export default function App() {
       // console.log('Audio file URI:', uri);
       // console.log('Audio data FormData object:', audioData);
       
-      const response = await axios.post('http://192.168.1.137:5000/process_audio', audioData, {
+      const response = await axios.post(`${process.env.REACT_APP_SERVER_URL}/process_audio`, audioData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
