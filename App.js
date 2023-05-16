@@ -167,7 +167,7 @@ export default function App() {
         },
       });
       
-      
+
       // console.log('Response from server:', response);
   
       // Inside the stopRecording function, after receiving the response from the server:
@@ -297,7 +297,7 @@ export default function App() {
   </Text>
 </View>
       
-      {/* Long block of text */}
+      {/* Long block of text */} 
       <Text style={styles.sectionTitle}>Full Story</Text>
       <View style={styles.borderedView}>
         <Text style={styles.responseText}>
