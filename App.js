@@ -167,6 +167,7 @@ export default function App() {
         },
       });
       
+      
       // console.log('Response from server:', response);
   
       // Inside the stopRecording function, after receiving the response from the server:
