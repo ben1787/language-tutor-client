@@ -5,6 +5,7 @@ import axios from 'axios';
 import { Slider } from 'react-native-elements';
 import { Switch } from 'react-native';
 import * as FileSystem from 'expo-file-system';
+import RNFetchBlob from 'rn-fetch-blob'; // only import this in a React Native environment
 
 export default function App() {
   const [responseReceived, setResponseReceived] = useState(true);
@@ -29,7 +30,7 @@ export default function App() {
 
   async function readConversationHistory() {
     const fileUri = FileSystem.documentDirectory + 'conversation_history.json';
-  
+
     try {
       // Check if the file exists
       const fileData = await FileSystem.getInfoAsync(fileUri);
@@ -37,7 +38,7 @@ export default function App() {
         // If the file does not exist, create it with an empty array
         await FileSystem.writeAsStringAsync(fileUri, JSON.stringify([]));
       }
-  
+
       // Read the conversation history from the file
       const conversationHistoryJSON = await FileSystem.readAsStringAsync(fileUri);
       // console.log("Read conversation history:", JSON.parse(conversationHistoryJSON));
@@ -46,8 +47,8 @@ export default function App() {
       console.error('Error reading conversation history:', error);
       return [];
     }
-  }  
-  
+  }
+
   const saveConversationHistory = async (conversationHistory) => {
     const filePath = await getConversationHistoryPath();
     try {
@@ -62,7 +63,7 @@ export default function App() {
   async function saveNewAssistantMessage(generated_response) {
     // console.log('Received generated_response:', generated_response);
     const conversationHistory = await readConversationHistory();
-  
+
     if (typeof generated_response === 'object') {
       // If generated_response is a JSON object, update the conversation history with the new JSON object
       for (const message of generated_response) {
@@ -72,10 +73,10 @@ export default function App() {
       // If generated_response is a string, push it as the "content" field of a new object in the conversationHistory
       conversationHistory.push({ "role": "assistant", "content": generated_response });
     }
-  
+
     // console.log('New Convo History: ', conversationHistory, '\n\n');
     await saveConversationHistory(conversationHistory);
-  }  
+  }
 
   async function resetApp() {
     // Reset your constants here
@@ -90,7 +91,7 @@ export default function App() {
     // setPlaybackSpeed(1.0);
     // setLevel(1);
     // setSelectedLanguage('hebrew');
-  
+
     // Delete the conversation_history.json file
     const conversationHistoryPath = FileSystem.documentDirectory + 'conversation_history.json';
     await FileSystem.deleteAsync(conversationHistoryPath, { idempotent: true });
@@ -105,7 +106,7 @@ export default function App() {
     }
     return bytes.buffer;
   }
-  
+
   async function startRecording() {
     try {
       console.log('Starting recording..');
@@ -127,6 +128,42 @@ export default function App() {
     }
   }
 
+  async function sendAudio(uri, fileName, audioData) {
+    let binaryStr;
+    if (typeof window === 'undefined') { // in React Native
+      binaryStr = await RNFetchBlob.fs.readFile(uri, 'base64');
+    } else { // in a browser
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      const reader = new FileReader();
+      reader.readAsBinaryString(blob);
+      reader.onloadend = () => {
+        binaryStr = reader.result;
+        audioData.append('audio_data', btoa(binaryStr)); // encode the binary string as base64
+      };
+      return;
+    }
+
+    audioData.append('audio_data', btoa(binaryStr)); // encode the binary string as base64
+  }
+
+
+  function sendRequest(binaryStr) {
+    const audioData = new FormData();
+    audioData.append('audio_data', btoa(binaryStr)); // encode the binary string as base64
+    // append other fields to audioData...
+
+    axios.post('http://192.168.1.137:5000/process_audio', audioData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    }).then(response => {
+      console.log('Response from server:', response);
+    }).catch(error => {
+      console.error('Failed to send audio data:', error);
+    });
+  }
+
   async function stopRecording() {
     setResponseReceived(false);
     console.log('Stopping recording..');
@@ -137,39 +174,38 @@ export default function App() {
     console.log('Recording stopped and stored at', uri);
 
     try {
-      const { sound, status } = await recording.createNewLoadedSoundAsync();
+      console.log("Entering try block...");
+
       const { sound: newSound } = await Audio.Sound.createAsync({ uri });
       await newSound.getStatusAsync();
-      const audioData = new FormData();
-      const fileName = uri.split('/').pop();
-      
-      audioData.append(
-        'audio_data',
-        {
-          uri: uri,
-          type: 'audio/x-caf',
-          name: fileName,
-        },
-        fileName
-      );
 
+      const fileName = uri.split('/').pop();
+
+      console.log('fileName:', fileName);
+
+      const audioData = new FormData();
+
+      // Append metadata to FormData
       audioData.append('playback_speed', playbackSpeed);
       audioData.append('level', level);
       audioData.append('language', selectedLanguage);
       audioData.append('conversation_history', JSON.stringify(await readConversationHistory()));
-            
-      // console.log('Audio file URI:', uri);
-      // console.log('Audio data FormData object:', audioData);
-      
-      const response = await axios.post(`${process.env.REACT_APP_SERVER_URL}/process_audio`, audioData, {
+
+      // Read and append audio data to FormData
+      // Note: this operation may take a while if the audio file is large
+      await sendAudio(uri, fileName, audioData);
+
+      console.log('Audio data FormData object:', audioData);
+
+      // Send the audio data to the server
+      const response = await axios.post('http://192.168.1.137:5000/process_audio', audioData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
       });
-      
 
-      // console.log('Response from server:', response);
-  
+      console.log('Response from server:', response);
+
       // Inside the stopRecording function, after receiving the response from the server:
       const responseAudioBase64 = response.data.response_audio;
       const responseAudioURI = `data:audio/mp3;base64,${responseAudioBase64}`;
@@ -199,6 +235,20 @@ export default function App() {
 
     } catch (err) {
       console.error('Failed to send audio data:', err);
+      if (err.response) {
+        // The request was made and the server responded with a status code
+        // that falls out of the range of 2xx
+        console.error('Server responded with status code:', err.response.status);
+        console.error('Response data:', err.response.data);
+        console.error('Response headers:', err.response.headers);
+      } else if (err.request) {
+        // The request was made but no response was received
+        console.error('No response received:', err.request);
+      } else {
+        // Something happened in setting up the request that triggered an Error
+        console.error('Error', err.message);
+      }
+      console.error(err.config);
       setResponseReceived(true);
       setIsRecording(false);
       setShowTranslation(false);
@@ -216,138 +266,138 @@ export default function App() {
 
   return (
     <ScrollView style={styles.container}>
-    {/* Top content */}
-    <View style={styles.topContent}>
-      {/* App Title */}
-      <Text style={styles.title}>Tale Tag</Text>
-  
-      {/* Language Toggle */}
-      <View style={styles.languageToggle}>
-        <Text style={styles.languageToggleLabel}>Hebrew</Text>
-        <Switch
-          value={selectedLanguage === 'english'}
-          onValueChange={(value) =>
-            setSelectedLanguage(value ? 'english' : 'hebrew')
-          }
-          thumbColor="#1e88e5"
-          trackColor={{ false: '#ccc', true: '#ccc' }}
+      {/* Top content */}
+      <View style={styles.topContent}>
+        {/* App Title */}
+        <Text style={styles.title}>Tale Tag</Text>
+
+        {/* Language Toggle */}
+        <View style={styles.languageToggle}>
+          <Text style={styles.languageToggleLabel}>Hebrew</Text>
+          <Switch
+            value={selectedLanguage === 'english'}
+            onValueChange={(value) =>
+              setSelectedLanguage(value ? 'english' : 'hebrew')
+            }
+            thumbColor="#1e88e5"
+            trackColor={{ false: '#ccc', true: '#ccc' }}
+          />
+          <Text style={styles.languageToggleLabel}>English</Text>
+        </View>
+
+        {/* Record Button */}
+        <TouchableOpacity
+          onPress={isRecording ? stopRecording : startRecording}
+          style={[
+            styles.recordButton,
+            responseReceived ? styles.enabledButton : styles.disabledButton,
+          ]}
+          disabled={!responseReceived}
+        >
+          <Text style={styles.buttonText}>
+            {isRecording ? 'Stop Recording' : 'Start Recording'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Middle content */}
+      <View style={styles.middleContent}>
+        {/* Generated Response */}
+        <Text style={styles.sectionTitle}>My Storyline</Text>
+        <View style={styles.borderedView}>
+          <TouchableOpacity
+            onPress={() => playResponse()}
+            disabled={isRecording || !responseReceived}
+            style={isRecording ? styles.disabledButton : styles.enabledButton}
+          >
+            <Text selectable={true} style={styles.responseText}>{generatedResponse}</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* English Translation */}
+        {showTranslation && (
+          <Text style={styles.sectionTitle}>My Storyline</Text>)}
+        {showTranslation && (
+          <View style={styles.borderedView}>
+            <Text style={styles.responseText}>{englishTranslation}</Text>
+          </View>
+        )}
+
+        {/* Transcript */}
+        <Text style={styles.sectionTitle}>Your Storyline</Text>
+        <View style={styles.borderedView}>
+          <Text selectable={true} style={styles.responseText}>
+            {transcript}
+          </Text>
+        </View>
+
+        {/* Improvement */}
+        <Text style={styles.sectionTitle}>Suggested Improvement</Text>
+        <View style={styles.borderedView}>
+          <Text style={styles.responseText}>
+            {improvement}
+          </Text>
+        </View>
+
+        {/* Word Suggestion */}
+        <Text style={styles.sectionTitle}>Word Challenge</Text>
+        <View style={styles.borderedView}>
+          <Text style={styles.responseText}>
+            {suggestedWord}
+          </Text>
+        </View>
+
+        {/* Long block of text */}
+        <Text style={styles.sectionTitle}>Full Story</Text>
+        <View style={styles.borderedView}>
+          <Text style={styles.responseText}>
+            {fullStory}
+          </Text>
+        </View>
+      </View>
+
+      {/* Bottom content */}
+      <View style={styles.bottomContent}>
+        {/* Playback Speed Slider */}
+        <Text style={styles.sliderLabel}>
+          Playback Speed: {playbackSpeed.toFixed(1)}x
+        </Text>
+        <Slider
+          value={playbackSpeed}
+          onValueChange={(value) => setPlaybackSpeed(value)}
+          minimumValue={0.5}
+          maximumValue={1.0}
+          step={0.1}
+          style={styles.slider}
+          thumbTintColor="#1e88e5"
+          minimumTrackTintColor="#1e88e5"
         />
-        <Text style={styles.languageToggleLabel}>English</Text>
+
+        {/* Level Slider */}
+        <Text style={styles.sliderLabel}>Level: {level}</Text>
+        <Slider
+          value={level}
+          onValueChange={(value) => setLevel(value)}
+          minimumValue={1}
+          maximumValue={10}
+          step={1}
+          style={styles.slider}
+          thumbTintColor="#1e88e5"
+          minimumTrackTintColor="#1e88e5"
+        />
+
+        {/* Reset Button */}
+        <TouchableOpacity
+          onPress={resetApp}
+          style={[
+            styles.resetButton,
+            responseReceived ? styles.enabledButton : styles.disabledButton,
+          ]}
+          disabled={!responseReceived}
+        >
+          <Text style={styles.buttonText}>Reset</Text>
+        </TouchableOpacity>
       </View>
-  
-      {/* Record Button */}
-      <TouchableOpacity
-        onPress={isRecording ? stopRecording : startRecording}
-        style={[
-          styles.recordButton,
-          responseReceived ? styles.enabledButton : styles.disabledButton,
-        ]}
-        disabled={!responseReceived}
-      >
-        <Text style={styles.buttonText}>
-          {isRecording ? 'Stop Recording' : 'Start Recording'}
-        </Text>
-      </TouchableOpacity>
-      </View>
-  
-  {/* Middle content */}
-  <View style={styles.middleContent}>
-      {/* Generated Response */}
-      <Text style={styles.sectionTitle}>My Storyline</Text>
-<View style={styles.borderedView}>
-  <TouchableOpacity
-    onPress={() => playResponse()}
-    disabled={isRecording || !responseReceived}
-    style={isRecording ? styles.disabledButton : styles.enabledButton}
-  >
-    <Text selectable={true} style={styles.responseText}>{generatedResponse}</Text>
-  </TouchableOpacity>
-</View>
-  
-      {/* English Translation */}
-      {showTranslation && (
-      <Text style={styles.sectionTitle}>My Storyline</Text>)}
-      {showTranslation && (
-      <View style={styles.borderedView}>
-        <Text style={styles.responseText}>{englishTranslation}</Text>
-      </View>
-    )}
-  
-      {/* Transcript */}
-      <Text style={styles.sectionTitle}>Your Storyline</Text>
-      <View style={styles.borderedView}>
-  <Text  selectable={true} style={styles.responseText}>
-    {transcript}
-  </Text>
-</View>
-  
-      {/* Improvement */}
-      <Text style={styles.sectionTitle}>Suggested Improvement</Text>
-      <View style={styles.borderedView}>
-  <Text style={styles.responseText}>
-    {improvement}
-  </Text>
-</View>
-      
-      {/* Word Suggestion */}
-      <Text style={styles.sectionTitle}>Word Challenge</Text>
-      <View style={styles.borderedView}>
-  <Text style={styles.responseText}>
-    {suggestedWord}
-  </Text>
-</View>
-      
-      {/* Long block of text */} 
-      <Text style={styles.sectionTitle}>Full Story</Text>
-      <View style={styles.borderedView}>
-        <Text style={styles.responseText}>
-          {fullStory}
-        </Text>
-      </View>
-    </View>
-  
-  {/* Bottom content */}
-  <View style={styles.bottomContent}>  
-      {/* Playback Speed Slider */}
-      <Text style={styles.sliderLabel}>
-        Playback Speed: {playbackSpeed.toFixed(1)}x
-      </Text>
-      <Slider
-        value={playbackSpeed}
-        onValueChange={(value) => setPlaybackSpeed(value)}
-        minimumValue={0.5}
-        maximumValue={1.0}
-        step={0.1}
-        style={styles.slider}
-        thumbTintColor="#1e88e5"
-        minimumTrackTintColor="#1e88e5"
-      />
-  
-      {/* Level Slider */}
-      <Text style={styles.sliderLabel}>Level: {level}</Text>
-      <Slider
-        value={level}
-        onValueChange={(value) => setLevel(value)}
-        minimumValue={1}
-        maximumValue={10}
-        step={1}
-        style={styles.slider}
-        thumbTintColor="#1e88e5"
-        minimumTrackTintColor="#1e88e5"
-      />
-  
-      {/* Reset Button */}
-      <TouchableOpacity
-        onPress={resetApp}
-        style={[
-          styles.resetButton,
-          responseReceived ? styles.enabledButton : styles.disabledButton,
-        ]}
-        disabled={!responseReceived}
-      >
-        <Text style={styles.buttonText}>Reset</Text>
-      </TouchableOpacity>
-    </View>
     </ScrollView>
   );
 }
@@ -415,7 +465,7 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 1,
     marginTop: 40
-},
+  },
 
   // Language toggle container style
   languageToggle: {
@@ -437,7 +487,7 @@ const styles = StyleSheet.create({
   // Slider style
   slider: {
     width: '70%', // reduce the width   
-    marginBottom: 20, 
+    marginBottom: 20,
   },
 
   // Reset button style
