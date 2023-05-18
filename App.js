@@ -118,7 +118,7 @@ export default function App() {
       });
 
       const recording = new Audio.Recording();
-      await recording.prepareToRecordAsync(Audio.RECORDING_OPTIONS_PRESET_HIGH_QUALITY);
+      await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HighQuality);
       await recording.startAsync();
       setRecording(recording);
       setIsRecording(true);
