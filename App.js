@@ -153,7 +153,7 @@ export default function App() {
     audioData.append('audio_data', btoa(binaryStr)); // encode the binary string as base64
     // append other fields to audioData...
 
-    axios.post('http://192.168.1.137:5000/process_audio', audioData, {
+    axios.post(process.env.REACT_APP_SERVER_URL+'/process_audio', audioData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
@@ -198,7 +198,7 @@ export default function App() {
       console.log('Audio data FormData object:', audioData);
 
       // Send the audio data to the server
-      const response = await axios.post('http://192.168.1.137:5000/process_audio', audioData, {
+      const response = await axios.post(process.env.REACT_APP_SERVER_URL+'/process_audio', audioData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
